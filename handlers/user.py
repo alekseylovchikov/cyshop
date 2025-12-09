@@ -3,7 +3,7 @@
 """
 import asyncio
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -363,24 +363,208 @@ async def my_ads(message: Message):
         return
     
     status_emoji = {
+        AdStatus.PENDING: "⏳",
+        AdStatus.APPROVED: "✅",
+        AdStatus.REJECTED: "❌"
+    }
+    
+    status_text = {
+        AdStatus.PENDING: "На модерации",
+        AdStatus.APPROVED: "Опубликовано",
+        AdStatus.REJECTED: "Отклонено"
+    }
+    
+    text = "📋 <b>Ваши объявления:</b>\n\n"
+    text += "Нажмите на объявление, чтобы посмотреть детали или удалить.\n\n"
+    
+    # Создаём inline-кнопки для каждого объявления
+    buttons = []
+    for ad in ads[:10]:  # Показываем последние 10
+        emoji = status_emoji.get(ad.status, "❓")
+        desc_preview = ad.description[:30] + "..." if len(ad.description) > 30 else ad.description
+        # Убираем переносы строк из превью
+        desc_preview = desc_preview.replace("\n", " ")
+        
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{emoji} #{ad.id}: {desc_preview}",
+                callback_data=f"myad_{ad.id}"
+            )
+        ])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("myad_"))
+async def view_my_ad(callback: CallbackQuery, bot: Bot):
+    """Просмотр своего объявления"""
+    ad_id = int(callback.data.split("_")[1])
+    ad = db.get_advertisement(ad_id)
+    
+    if not ad:
+        await callback.answer("❌ Объявление не найдено", show_alert=True)
+        return
+    
+    # Проверяем, что объявление принадлежит пользователю
+    if ad.user_id != callback.from_user.id:
+        await callback.answer("⛔ Это не ваше объявление", show_alert=True)
+        return
+    
+    status_text = {
         AdStatus.PENDING: "⏳ На модерации",
         AdStatus.APPROVED: "✅ Опубликовано",
         AdStatus.REJECTED: "❌ Отклонено"
     }
     
+    caption = (
+        f"📋 <b>Объявление #{ad.id}</b>\n\n"
+        f"📊 Статус: {status_text.get(ad.status, '❓')}\n"
+        f"📅 Создано: {ad.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+        f"📝 <b>Описание:</b>\n{ad.description}"
+    )
+    
+    if ad.status == AdStatus.REJECTED and ad.reject_reason:
+        caption += f"\n\n💬 <b>Причина отклонения:</b>\n{ad.reject_reason}"
+    
+    # Кнопки управления
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить объявление", callback_data=f"deladconfirm_{ad.id}")],
+        [InlineKeyboardButton(text="◀️ Назад к списку", callback_data="myads_back")]
+    ])
+    
+    await callback.answer()
+    
+    try:
+        if len(ad.photo_ids) == 1:
+            await bot.send_photo(
+                chat_id=callback.from_user.id,
+                photo=ad.photo_ids[0],
+                caption=caption,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        else:
+            # Отправляем альбом
+            media = [InputMediaPhoto(media=photo) for photo in ad.photo_ids]
+            media[0].caption = caption
+            media[0].parse_mode = "HTML"
+            
+            await bot.send_media_group(chat_id=callback.from_user.id, media=media)
+            # Кнопки отправляем отдельным сообщением
+            await bot.send_message(
+                chat_id=callback.from_user.id,
+                text=f"⬆️ Объявление #{ad.id} — выберите действие:",
+                reply_markup=keyboard
+            )
+    except Exception as e:
+        await bot.send_message(
+            chat_id=callback.from_user.id,
+            text=f"❌ Ошибка загрузки объявления: {e}"
+        )
+
+
+@router.callback_query(F.data == "myads_back")
+async def back_to_my_ads(callback: CallbackQuery):
+    """Вернуться к списку своих объявлений"""
+    ads = db.get_user_advertisements(callback.from_user.id)
+    
+    if not ads:
+        await callback.message.edit_text(
+            "📭 У вас пока нет объявлений.\n"
+            "Нажмите «📝 Добавить объявление» чтобы создать первое!"
+        )
+        await callback.answer()
+        return
+    
+    status_emoji = {
+        AdStatus.PENDING: "⏳",
+        AdStatus.APPROVED: "✅",
+        AdStatus.REJECTED: "❌"
+    }
+    
     text = "📋 <b>Ваши объявления:</b>\n\n"
+    text += "Нажмите на объявление, чтобы посмотреть детали или удалить.\n\n"
     
-    for ad in ads[:10]:  # Показываем последние 10
-        status = status_emoji.get(ad.status, "❓")
-        text += f"<b>#{ad.id}</b> — {status}\n"
-        text += f"📝 {ad.description[:50]}...\n" if len(ad.description) > 50 else f"📝 {ad.description}\n"
+    buttons = []
+    for ad in ads[:10]:
+        emoji = status_emoji.get(ad.status, "❓")
+        desc_preview = ad.description[:30] + "..." if len(ad.description) > 30 else ad.description
+        desc_preview = desc_preview.replace("\n", " ")
         
-        if ad.status == AdStatus.REJECTED and ad.reject_reason:
-            text += f"💬 Причина: {ad.reject_reason}\n"
-        
-        text += "\n"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{emoji} #{ad.id}: {desc_preview}",
+                callback_data=f"myad_{ad.id}"
+            )
+        ])
     
-    await message.answer(text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except:
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("deladconfirm_"))
+async def confirm_delete_ad(callback: CallbackQuery):
+    """Подтверждение удаления объявления"""
+    ad_id = int(callback.data.split("_")[1])
+    ad = db.get_advertisement(ad_id)
+    
+    if not ad:
+        await callback.answer("❌ Объявление не найдено", show_alert=True)
+        return
+    
+    if ad.user_id != callback.from_user.id:
+        await callback.answer("⛔ Это не ваше объявление", show_alert=True)
+        return
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"delad_{ad_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data=f"myad_{ad_id}")
+        ]
+    ])
+    
+    await callback.message.answer(
+        f"⚠️ <b>Вы уверены, что хотите удалить объявление #{ad_id}?</b>\n\n"
+        f"Это действие нельзя отменить.",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delad_"))
+async def delete_my_ad(callback: CallbackQuery):
+    """Удаление объявления"""
+    ad_id = int(callback.data.split("_")[1])
+    ad = db.get_advertisement(ad_id)
+    
+    if not ad:
+        await callback.answer("❌ Объявление не найдено", show_alert=True)
+        return
+    
+    if ad.user_id != callback.from_user.id:
+        await callback.answer("⛔ Это не ваше объявление", show_alert=True)
+        return
+    
+    # Удаляем объявление
+    success = db.delete_advertisement(ad_id, callback.from_user.id)
+    
+    if success:
+        await callback.message.edit_text(
+            f"✅ <b>Объявление #{ad_id} удалено</b>",
+            parse_mode="HTML"
+        )
+        await callback.answer("✅ Объявление удалено!", show_alert=True)
+    else:
+        await callback.answer("❌ Не удалось удалить объявление", show_alert=True)
 
 
 async def notify_admins_new_ad(bot: Bot, ad_id: int, user, photos: list, description: str):

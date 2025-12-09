@@ -166,6 +166,16 @@ class Database:
             ).fetchone()
             return row['count']
     
+    def delete_advertisement(self, ad_id: int, user_id: int) -> bool:
+        """Удаляет объявление пользователя. Возвращает True если удалено."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "DELETE FROM advertisements WHERE id = ? AND user_id = ?",
+                (ad_id, user_id)
+            )
+            conn.commit()
+            return conn.total_changes > 0
+    
     def get_user_ads_today(self, user_id: int) -> int:
         """Возвращает количество объявлений пользователя за сегодня"""
         with self._get_connection() as conn:
