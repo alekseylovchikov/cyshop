@@ -543,19 +543,26 @@ async def confirm_delete_ad(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("delad_"))
 async def delete_my_ad(callback: CallbackQuery, bot: Bot):
     """Удаление объявления"""
+    print(f"[DEBUG] delete_my_ad called with callback.data: {callback.data}")
     ad_id = int(callback.data.split("_")[1])
     ad = db.get_advertisement(ad_id)
     
     if not ad:
+        print(f"[DEBUG] Ad {ad_id} not found")
         await callback.answer("❌ Объявление не найдено", show_alert=True)
         return
     
+    print(f"[DEBUG] Ad found: id={ad.id}, user_id={ad.user_id}, callback user={callback.from_user.id}")
+    
     if ad.user_id != callback.from_user.id:
+        print(f"[DEBUG] User ID mismatch")
         await callback.answer("⛔ Это не ваше объявление", show_alert=True)
         return
     
-    # Удаляем объявление
+    # Удаляем объявление из БД
+    print(f"[DEBUG] Attempting to delete ad {ad_id}")
     success = db.delete_advertisement(ad_id, callback.from_user.id)
+    print(f"[DEBUG] Delete result: {success}")
     
     if success:
         # Пробуем отредактировать сообщение, если не получится - удаляем и отправляем новое
@@ -564,20 +571,25 @@ async def delete_my_ad(callback: CallbackQuery, bot: Bot):
                 f"✅ <b>Объявление #{ad_id} удалено</b>",
                 parse_mode="HTML"
             )
-        except Exception:
+            print(f"[DEBUG] Message edited successfully")
+        except Exception as e:
+            print(f"[DEBUG] Edit failed: {e}, trying delete + send")
             # Если это сообщение с фото, edit_text не сработает
             try:
                 await callback.message.delete()
-            except Exception:
-                pass
+                print(f"[DEBUG] Message deleted")
+            except Exception as e2:
+                print(f"[DEBUG] Delete message failed: {e2}")
             await bot.send_message(
                 chat_id=callback.from_user.id,
                 text=f"✅ <b>Объявление #{ad_id} удалено</b>",
                 reply_markup=get_main_keyboard(),
                 parse_mode="HTML"
             )
+            print(f"[DEBUG] New message sent")
         await callback.answer("✅ Объявление удалено!", show_alert=True)
     else:
+        print(f"[DEBUG] Delete from DB failed")
         await callback.answer("❌ Не удалось удалить объявление", show_alert=True)
 
 
