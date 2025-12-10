@@ -541,7 +541,7 @@ async def confirm_delete_ad(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("delad_"))
-async def delete_my_ad(callback: CallbackQuery):
+async def delete_my_ad(callback: CallbackQuery, bot: Bot):
     """Удаление объявления"""
     ad_id = int(callback.data.split("_")[1])
     ad = db.get_advertisement(ad_id)
@@ -558,10 +558,24 @@ async def delete_my_ad(callback: CallbackQuery):
     success = db.delete_advertisement(ad_id, callback.from_user.id)
     
     if success:
-        await callback.message.edit_text(
-            f"✅ <b>Объявление #{ad_id} удалено</b>",
-            parse_mode="HTML"
-        )
+        # Пробуем отредактировать сообщение, если не получится - удаляем и отправляем новое
+        try:
+            await callback.message.edit_text(
+                f"✅ <b>Объявление #{ad_id} удалено</b>",
+                parse_mode="HTML"
+            )
+        except Exception:
+            # Если это сообщение с фото, edit_text не сработает
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await bot.send_message(
+                chat_id=callback.from_user.id,
+                text=f"✅ <b>Объявление #{ad_id} удалено</b>",
+                reply_markup=get_main_keyboard(),
+                parse_mode="HTML"
+            )
         await callback.answer("✅ Объявление удалено!", show_alert=True)
     else:
         await callback.answer("❌ Не удалось удалить объявление", show_alert=True)
